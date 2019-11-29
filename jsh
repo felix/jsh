@@ -30,7 +30,7 @@ _create_zfs_datasets() {
 	[ ! -d "$ZROOT/$JDIST" ] && zfs create -p "$ZROOT/$JDIST"
 }
 
-_fetch_release() {
+_release_fetch() {
 	for f in base.txz lib32.txz
 	do
 		if [ ! -f "$JROOT/$JDIST/$f" ]
@@ -41,7 +41,7 @@ _fetch_release() {
 	done
 }
 
-_extract_release() {
+_release_extract() {
 	_template_create_zfs
 	for f in base.txz lib32.txz
 	do
@@ -53,7 +53,7 @@ _extract_release() {
 	done
 }
 
-_update_release() {
+_release_update() {
 	_log "Updating $JDIST/$f..."
 	env UNAME_r="$RELEASE" freebsd-update -b "$JROOT/$JTMPL" fetch install
 	env UNAME_r="$RELEASE" freebsd-update -b "$JROOT/$JTMPL" IDS
@@ -67,7 +67,6 @@ _template_create_zfs() {
 _template_update() {
 	_template_create_zfs
 	[ -e "$JROOT/$JTMPL/var/empty" ] && chflags noschg "$JROOT/$JTMPL/var/empty"
-	cp /etc/resolv.conf "$JROOT/$JSKEL/etc/resolv.conf"
 	for d in etc usr/local tmp var root; do
 		if [ -d "$JROOT/$JTMPL/$d" ]; then
 			_log "Moving $JTMPL/$d..."
@@ -75,6 +74,7 @@ _template_update() {
 			mv "$JROOT/$JTMPL/$d" "$JROOT/$JSKEL/$d"
 		fi
 	done
+	cp /etc/resolv.conf "$JROOT/$JSKEL/etc/resolv.conf"
 	[ -e "$JROOT/$JSKEL/var/empty" ] && chflags schg "$JROOT/$JSKEL/var/empty"
 
 	cd "$JROOT/$JTMPL"
@@ -109,7 +109,12 @@ _jail_new_config() {
 	[ -z "$name" ] && _err "Cannot create jail config: missing name"
 	[ -z "$ip" ] && _err "Cannot set IP: missing IP address"
 	if grep -qv -e "^$name" /etc/jail.conf; then echo "$name { \$ip = $ip; }" >>/etc/jail.conf; fi
+	_jail_update_fstab "$name"
+}
 
+_jail_update_fstab() {
+	local name="$1"
+	[ -z "$name" ] && _err "Cannot create jail config: missing name"
 	cat << EOF >"$JROOT/$name/fstab"
 $JROOT/$JTMPL	$JROOT/$name/root nullfs   ro          0 0
 $JROOT/$name/overlay	$JROOT/$name/root/s nullfs  rw  0 0
@@ -202,18 +207,18 @@ _cmd_release() {
 	case "$cmd" in
 		sync)
 			_create_zfs_datasets
-		      	_fetch_release
-			_extract_release
-			_update_release
+		      	_release_fetch
+			_release_extract
+			_release_update
 			;;
 		fetch)
-		      	_fetch_release
+		      	_release_fetch
 			;;
-		extract) 
-			_extract_release
+		extract)
+			_release_extract
 			;;
-		update) 
-			_update_release
+		update)
+			_release_update
 			;;
 		*)
 			cat <<EOM
@@ -239,7 +244,7 @@ _main() {
 		template)
 			_cmd_template "$@"
 			;;
-		create|c) 
+		create|c)
 			_jail_new_overlay "$@"
 			_jail_new_config "$@"
 			;;
@@ -264,6 +269,11 @@ _main() {
 		shell)
 		       	_jail_shell "$@"
 		       	;;
+		upgrade)
+		       	_jail_stop "$@"
+		       	_jail_update_fstab "$@"
+		       	_jail_start "$@"
+		       	;;
 		*)
 			cat <<EOM
 Usage: jsh [cmd]
@@ -271,6 +281,7 @@ start <name>            - Start jail <name>
 stop <name>             - Stop jail <name>
 shell <name>            - Start a shell in jail <name>
 create <name> [id]      - Create jail <name>
+upgrade <name>          - Upgrade jail <name>
 delete <name>           - Delete jail <name>
 release                 - Release sub-commands
 template                - Template sub-commands
