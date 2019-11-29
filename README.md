@@ -11,6 +11,7 @@ start <name>            - Start jail <name>
 stop <name>             - Stop jail <name>
 shell <name>            - Start a shell in jail <name>
 create <name> [id]      - Create jail <name>
+upgrade <name>          - Upgrade jail <name>
 delete <name>           - Delete jail <name>
 release                 - Release sub-commands
 template                - Template sub-commands
