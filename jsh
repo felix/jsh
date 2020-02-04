@@ -109,16 +109,17 @@ _jail_new_config() {
 	[ -z "$name" ] && _err "Cannot create jail config: missing name"
 	[ -z "$ip" ] && _err "Cannot set IP: missing IP address"
 	if grep -qv -e "^$name" /etc/jail.conf; then echo "$name { \$ip = $ip; }" >>/etc/jail.conf; fi
-	_jail_update_fstab "$name"
+	_jail_create_fstab "$name"
 }
 
-_jail_update_fstab() {
+_jail_create_fstab() {
 	local name="$1"
 	[ -z "$name" ] && _err "Cannot create jail config: missing name"
-	cat << EOF >"$JROOT/$name/fstab"
+	cat << EOF >"$JROOT/$name/overlay/etc/fstab"
 $JROOT/$JTMPL	$JROOT/$name/root nullfs   ro          0 0
 $JROOT/$name/overlay	$JROOT/$name/root/s nullfs  rw  0 0
 EOF
+	cd $JROOT/$name && ln -s overlay/etc/fstab
 }
 
 _jail_start() {
@@ -271,7 +272,7 @@ _main() {
 		       	;;
 		upgrade)
 		       	_jail_stop "$@"
-		       	_jail_update_fstab "$@"
+		       	#_jail_update_fstab "$@"
 		       	_jail_start "$@"
 		       	;;
 		*)
