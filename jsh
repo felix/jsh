@@ -108,7 +108,7 @@ _jail_new_config() {
 	local ip="$2"
 	[ -z "$name" ] && _err "Cannot create jail config: missing name"
 	[ -z "$ip" ] && _err "Cannot set IP: missing IP address"
-	if grep -qv -e "^$name" /etc/jail.conf; then echo "$name { \$ip = $ip; }" >>/etc/jail.conf; fi
+	if grep -qv -e "^$name" /etc/jail.conf; then echo "$name { \$id = $ip; }" >>/etc/jail.conf; fi
 	_jail_create_fstab "$name"
 }
 
@@ -161,7 +161,7 @@ _jail_shell() {
 }
 
 _jail_list() {
-	ls -1I "$JROOT"
+	jls host.hostname ip4.addr
 }
 
 _jail_chroot() {
