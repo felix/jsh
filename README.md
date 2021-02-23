@@ -14,6 +14,14 @@ they break.
 
 **Not recommended for production**
 
+## Install
+
+```sh
+# cp jsh /usr/local/sbin/
+```
+
+## Usage
+
 ```shell
 $ jsh help
 Usage: jsh [cmd]

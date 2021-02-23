@@ -1,5 +1,4 @@
 #!/bin/sh
-# shellcheck disable=SC2039
 
 [ -z "${DEBUG}" ] || set -x
 set -e
@@ -15,13 +14,11 @@ JSKELTMPL="$JROOT/.templates/skel"
 DIST_SRC=${DIST_SRC:-http://mirror.internode.on.net/pub/FreeBSD/releases/${JARCH}/${RELEASE}}
 
 err() {
-	log "ERROR: $1"
+	printf "[%s] %s\n" "$(date -Iseconds)" "ERROR: $1"
 	exit 1
 }
 
-log() {
-	printf "[%s] %s\n" "$(date -Iseconds)" "$1"
-}
+log() { [ -z "$QUIET" ] && printf "[%s] %s\n" "$(date -Iseconds)" "$1"; }
 
 sync_release() {
 	log "Creating global datasets..."
@@ -43,19 +40,18 @@ sync_release() {
 }
 
 update_release() {
-	[ ! -d "$JROOT/$JTMPL" ] && err "You need to sync first"
+	[ ! -d "$JROOT/$JTMPL" ] && err "Relase sync required"
 	log "Updating $JDIST/$f..."
 	env UNAME_r="$RELEASE" freebsd-update -b "$JROOT/$JTMPL" fetch install
 	env UNAME_r="$RELEASE" freebsd-update -b "$JROOT/$JTMPL" IDS
 }
 
 delete_release() {
-	local relname=$1
-	[ -z "$relname" ] && err "Missing release name"
-	[ "$relname" = "$RELEASE" ] && err "Cannot delete current release"
-	zfs list "$ZROOT/.releases/$relname">/dev/null || err "No release found"
-	log "Deleting $ZROOT/.releases/$relname..."
-	zfs destroy -r "$ZROOT/.releases/$relname"
+	[ -z "$1" ] && err "Release name required"
+	[ "$1" = "$RELEASE" ] && err "Cannot delete current release"
+	zfs list "$ZROOT/.releases/$1">/dev/null || err "No release found"
+	log "Deleting $ZROOT/.releases/$1..."
+	zfs destroy -r "$ZROOT/.releases/$1"
 }
 
 sync_template() {
@@ -93,18 +89,17 @@ sync_template() {
 }
 
 delete_template() {
-	local relname=$1
-	[ -z "$relname" ] && err "Missing release name"
-	zfs list "$ZROOT/.templates/$relname">/dev/null || err "No template found"
-	log "Deleting $ZROOT/.templates/$relname..."
-	zfs destroy -r "$ZROOT/.templates/$relname"
+	[ -z "$1" ] && err "Release name required"
+	zfs list "$ZROOT/.templates/$1">/dev/null || err "Template for $1 not found"
+	log "Deleting $ZROOT/.templates/$1..."
+	zfs destroy -r "$ZROOT/.templates/$1"
 }
 
 create_jail() {
-	local name=$1
-	local ip="$2"
-	[ -z "$name" ] && err "Cannot create overlay: missing name"
-	[ -z "$ip" ] && err "Cannot set IP: missing IP address"
+	name=$1
+	ip="$2"
+	[ -z "$name" ] && err "Jail name required"
+	[ -z "$ip" ] && err "ID required"
 
 	log "Creating overlay..."
 	[ ! -e "$ZROOT/$name" ] && zfs create -p "$ZROOT/$name"
@@ -122,32 +117,36 @@ EOF
 }
 
 start_jail() {
-	local name="$1"; shift
-	[ -z "$name" ] && err "Cannot start jail: missing name"
+	[ -z "$1" ] && err "Jail name required"
 
-	jls -j "$name" >/dev/null 2>&1 && err "Jail $name already running"
-	jail -q -c "$name"
-	[ "$1" == "-c" ] && jail_shell "$name"
+	while [ -n "$1" ]; do
+		jls -j "$1" >/dev/null 2>&1 && err "Jail $1 already running"
+		jail -q -c "$1" && log "Started $1"
+		shift
+	done
 }
 
 stop_jail() {
-	local name="$1"
-	[ -z "$name" ] && err "Cannot stop jail: missing name"
+	[ -z "$1" ] && err "Jail name required"
 
-	if [ "$(jls host.hostname |grep -c "^$name")" == "1" ]; then
-		jail -qr "$name"
-	else
-		log "Jail $name is not running"
-	fi
+	while [ -n "$1" ]; do
+		if [ "$(jls host.hostname |grep -c "^$1")" = "1" ]; then
+			jail -qr "$1" && log "Stopped $1"
+		else
+			err "Jail $1 is not running"
+		fi
+		shift
+	done
+
 }
 
 jail_shell() {
-	local name="$1"
-	[ -z "$name" ] && err "Cannot start shell: missing name"
+	name="$1"
+	[ -z "$name" ] && err "Jail name required"
 	shift
 
 	if [ "$(jls host.hostname jid |grep -c "^$name")" != "1" ]; then
-		err "Jail not running"
+		err "Jail $1 not running"
 	fi
 
 	if [ -z "$*" ]; then
@@ -174,18 +173,18 @@ jail_list() {
 }
 
 jail_chroot() {
-	local name="$1"
-	[ -z "$name" ] && err "Cannot start chroot: missing name"
-	local path="$JROOT/$name/root"
+	name="$1"
+	[ -z "$name" ] && err "Jail name required"
+	path="$JROOT/$name/root"
 	echo "--> $path"
 	env SHELL= chroot "$path"
 }
 
 delete_jail() {
-	local name="$1"
-	[ -z "$name" ] && err "Cannot delete jail: missing name"
+	name="$1"
+	[ -z "$name" ] && err "Jail name required"
 
-	if [ "$(jls host.hostname jid |grep -c "^$name")" == "1" ]; then
+	if [ "$(jls host.hostname jid |grep -c "^$name")" = "1" ]; then
 		jail -qr "$name"
 	fi
 
@@ -194,7 +193,7 @@ delete_jail() {
 }
 
 template_cmd() {
-	local cmd="${1:-help}"
+	cmd="${1:-help}"
 	shift || true
 
 	case "$cmd" in
@@ -215,7 +214,7 @@ EOM
 }
 
 release_cmd() {
-	local cmd="${1:-help}"
+	cmd="${1:-help}"
 	shift || true
 
 	case "$cmd" in
@@ -242,7 +241,20 @@ EOM
 
 
 main() {
-	local cmd="${1:-help}"
+	while getopts ":q" opt; do
+		case $opt in
+			q) QUIET=true ;;
+			?)
+				usage
+				exit 0
+				;;
+		esac
+	done
+
+	# Shift the rest
+	shift $((OPTIND - 1))
+
+	cmd="${1:-help}"
 	shift || true
 
 	case "$cmd" in
