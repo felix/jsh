@@ -1,8 +1,18 @@
 # jsh: Jail shell
 
-This is very much a work-in-progress and things are added as I need them or they break.
+My own personal FreeBSD jail management script in POSIX shell.
 
-**Do not use this script in production**
+It can be used to configure and maintain FreeBSD jails using only the built in
+jail management tools.
+
+- ZFS filesystems for releases, templates and jails.
+- Minimal reuse by using an overlay for each jail.
+- Ability to update the base filesystem for all jails.
+
+This is very much a work-in-progress and things are added as I need them or
+they break.
+
+**Not recommended for production**
 
 ```shell
 $ jsh help
@@ -11,7 +21,6 @@ start <name>            - Start jail <name>
 stop <name>             - Stop jail <name>
 shell <name>            - Start a shell in jail <name>
 create <name> [id]      - Create jail <name>
-upgrade <name>          - Upgrade jail <name>
 delete <name>           - Delete jail <name>
 release                 - Release sub-commands
 template                - Template sub-commands
@@ -20,14 +29,14 @@ template                - Template sub-commands
 ```shell
 $ jsh release help
 Usage: release [cmd]
-sync                    - Download/unpack/update release
-fetch                   - Download distfiles for latest release
-extract                 - Unpack latest release
-update                  - Update latest release using freebsd-update
+sync                    - Create fs, fetch, extract & update
+update                  - Update release using freebsd-update
+delete                  - Delete named release
 ```
 
 ```shell
 $ jsh template help
 Usage: template [cmd]
 sync                    - Sync template for current release
+delete                  - Delete template for named release
 ```
