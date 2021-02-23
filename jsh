@@ -11,146 +11,143 @@ JARCH=${JARCH:-$(sysctl -n hw.machine_arch)}
 JDIST=".releases/$RELEASE"
 JTMPL=".templates/$RELEASE/root"
 JSKEL=".templates/$RELEASE/skel"
+JSKELTMPL="$JROOT/.templates/skel"
 DIST_SRC=${DIST_SRC:-http://mirror.internode.on.net/pub/FreeBSD/releases/${JARCH}/${RELEASE}}
 
-#JAIL_IP=${JAIL_IP:-172.16.0.%d}
-
-_err() {
-	_log "ERROR: $1"
+err() {
+	log "ERROR: $1"
 	exit 1
 }
 
-_log() {
-	printf "%s\n" "$1"
+log() {
+	printf "[%s] %s\n" "$(date -Iseconds)" "$1"
 }
 
-_create_zfs_datasets() {
-	_log "Creating global datasets..."
+sync_release() {
+	log "Creating global datasets..."
 	[ ! -d "$ZROOT" ] && zfs create -o compression=lz4 -o mountpoint="$JROOT" -p "$ZROOT"
 	[ ! -d "$ZROOT/$JDIST" ] && zfs create -p "$ZROOT/$JDIST"
-}
 
-_release_fetch() {
-	for f in base.txz lib32.txz
-	do
-		if [ ! -f "$JROOT/$JDIST/$f" ]
-		then
-			_log "Fetching $JDIST/$f..."
+	for f in base.txz lib32.txz; do
+		if [ ! -f "$JROOT/$JDIST/$f" ]; then
+			log "Fetching $JDIST/$f..."
 			fetch -m -o "$JROOT/$JDIST/$f" "$DIST_SRC/$f"
-		fi
-	done
-}
-
-_release_extract() {
-	_template_create_zfs
-	for f in base.txz lib32.txz
-	do
-		if [ -f "$JROOT/$JDIST/$f" ]
-		then
-			_log "Extracting $JDIST/$f..."
+			log "Extracting $JDIST/$f..."
 			tar -C "$JROOT/$JTMPL" -xkf "$JROOT/$JDIST/$f"
 		fi
 	done
-}
 
-_release_update() {
-	_log "Updating $JDIST/$f..."
+	log "Updating $JDIST/$f..."
 	env UNAME_r="$RELEASE" freebsd-update -b "$JROOT/$JTMPL" fetch install
 	env UNAME_r="$RELEASE" freebsd-update -b "$JROOT/$JTMPL" IDS
 }
 
-_template_create_zfs() {
-	[ ! -d "$ZROOT/$JTMPL" ] && zfs create -p "$ZROOT/$JTMPL"
-	[ ! -d "$ZROOT/$JSKEL" ] && zfs create -p "$ZROOT/$JSKEL"
+update_release() {
+	[ ! -d "$JROOT/$JTMPL" ] && err "You need to sync first"
+	log "Updating $JDIST/$f..."
+	env UNAME_r="$RELEASE" freebsd-update -b "$JROOT/$JTMPL" fetch install
+	env UNAME_r="$RELEASE" freebsd-update -b "$JROOT/$JTMPL" IDS
 }
 
-_template_update() {
-	_template_create_zfs
+delete_release() {
+	local relname=$1
+	[ -z "$relname" ] && err "Missing release name"
+	[ "$relname" = "$RELEASE" ] && err "Cannot delete current release"
+	zfs list "$ZROOT/.releases/$relname">/dev/null || err "No release found"
+	log "Deleting $ZROOT/.releases/$relname..."
+	zfs destroy -r "$ZROOT/.releases/$relname"
+}
+
+sync_template() {
+	log "Creating template datasets..."
+	[ ! -d "$ZROOT/$JTMPL" ] && zfs create -p "$ZROOT/$JTMPL"
+	[ ! -d "$ZROOT/$JSKEL" ] && zfs create -p "$ZROOT/$JSKEL"
+
+	log "Creating template skeleton..."
 	[ -e "$JROOT/$JTMPL/var/empty" ] && chflags noschg "$JROOT/$JTMPL/var/empty"
 	for d in etc usr/local tmp var root; do
 		if [ -d "$JROOT/$JTMPL/$d" ]; then
-			_log "Moving $JTMPL/$d..."
+			log "Moving $JTMPL/$d..."
 			mkdir -p "$(dirname "$JROOT/$JSKEL/$d")"
-			mv "$JROOT/$JTMPL/$d" "$JROOT/$JSKEL/$d"
+			mv -iv "$JROOT/$JTMPL/$d" "$JROOT/$JSKEL/$d"
 		fi
 	done
-	cp /etc/resolv.conf "$JROOT/$JSKEL/etc/resolv.conf"
 	[ -e "$JROOT/$JSKEL/var/empty" ] && chflags schg "$JROOT/$JSKEL/var/empty"
 
+	log "Linking template overlay..."
 	cd "$JROOT/$JTMPL"
 	mkdir -p s
 	for d in etc tmp var root; do
-		_log "Linking $JTMPL/$d..."
+		log "Linking $JTMPL/$d..."
 		ln -sf "s/$d" "$d"
 	done
 	# usr/local is different
 	cd usr && ln -sf "../s/usr/local" "local"
+
+	# seed skel
+	if [ -d "$JSKELTMPL" ]; then
+		log "Syncing custom skeleton"
+		cp -av "$JSKELTMPL/" "$JROOT/$JSKEL/"
+	fi
+	log "Remember to check/create $JROOT/$JSKEL/etc/rc.conf"
 }
 
-_jail_new_overlay() {
-	local name=$1
-	[ -z "$name" ] && _err "Cannot create overlay: missing name"
+delete_template() {
+	local relname=$1
+	[ -z "$relname" ] && err "Missing release name"
+	zfs list "$ZROOT/.templates/$relname">/dev/null || err "No template found"
+	log "Deleting $ZROOT/.templates/$relname..."
+	zfs destroy -r "$ZROOT/.templates/$relname"
+}
 
-	_log "Creating overlay..."
+create_jail() {
+	local name=$1
+	local ip="$2"
+	[ -z "$name" ] && err "Cannot create overlay: missing name"
+	[ -z "$ip" ] && err "Cannot set IP: missing IP address"
+
+	log "Creating overlay..."
 	[ ! -e "$ZROOT/$name" ] && zfs create -p "$ZROOT/$name"
 	[ ! -d "$ZROOT/$name/root" ] && mkdir -p "$JROOT/$name/root"
 	[ ! -d "$ZROOT/$name/overlay" ] && mkdir -p "$JROOT/$name/overlay"
 	rsync -auqv --partial "$JROOT/$JSKEL/" "$JROOT/$name/overlay"
 	sysrc -f "$JROOT/$name/overlay/etc/rc.conf" hostname="$name" >/dev/null
-}
 
-#_max_ip() {
-#	return "$(jls ip4.addr | cut -d'.' -f4 | sort -n | tail -1)"
-#}
-
-_jail_new_config() {
-	local name="$1"
-	local ip="$2"
-	[ -z "$name" ] && _err "Cannot create jail config: missing name"
-	[ -z "$ip" ] && _err "Cannot set IP: missing IP address"
 	if grep -qv -e "^$name" /etc/jail.conf; then echo "$name { \$id = $ip; }" >>/etc/jail.conf; fi
-	_jail_create_fstab "$name"
-}
-
-_jail_create_fstab() {
-	local name="$1"
-	[ -z "$name" ] && _err "Cannot create jail config: missing name"
 	cat << EOF >"$JROOT/$name/overlay/etc/fstab"
 $JROOT/$JTMPL	$JROOT/$name/root nullfs   ro          0 0
 $JROOT/$name/overlay	$JROOT/$name/root/s nullfs  rw  0 0
 EOF
-	cd $JROOT/$name && ln -s overlay/etc/fstab
+	cd "$JROOT/$name" && ln -s overlay/etc/fstab fstab
 }
 
-_jail_start() {
+start_jail() {
 	local name="$1"; shift
-	[ -z "$name" ] && _err "Cannot start jail: missing name"
+	[ -z "$name" ] && err "Cannot start jail: missing name"
 
-	if jls -j "$name" >/dev/null 2>&1; then
-		_err "Jail $name already running"
-	fi
-	jail -c "$name"
-	[ "$1" == "-c" ] && _jail_shell "$name"
+	jls -j "$name" >/dev/null 2>&1 && err "Jail $name already running"
+	jail -q -c "$name"
+	[ "$1" == "-c" ] && jail_shell "$name"
 }
 
-_jail_stop() {
+stop_jail() {
 	local name="$1"
-	[ -z "$name" ] && _err "Cannot stop jail: missing name"
+	[ -z "$name" ] && err "Cannot stop jail: missing name"
 
-	if [ "$(jls host.hostname jid |grep -c "^$name")" == "1" ]; then
+	if [ "$(jls host.hostname |grep -c "^$name")" == "1" ]; then
 		jail -qr "$name"
 	else
-		_log "Jail $name is not running"
+		log "Jail $name is not running"
 	fi
 }
 
-_jail_shell() {
+jail_shell() {
 	local name="$1"
-	[ -z "$name" ] && _err "Cannot start shell: missing name"
+	[ -z "$name" ] && err "Cannot start shell: missing name"
 	shift
 
 	if [ "$(jls host.hostname jid |grep -c "^$name")" != "1" ]; then
-		_err "Jail not running"
+		err "Jail not running"
 	fi
 
 	if [ -z "$*" ]; then
@@ -160,21 +157,33 @@ _jail_shell() {
 	fi
 }
 
-_jail_list() {
-	jls host.hostname ip4.addr
+jail_list() {
+	jail -e'|' | \
+		#awk -F'|' '{ delete vars; for(i = 1; i <= NF; ++i) { n = index($i, "="); if(n) { vars[substr($i, 1, n - 1)] = substr($i, n + 1) } } name = vars["name"]} { print name }' /etc/jail.conf
+	awk '/[-a-z]+ {/ { print $1 }' /etc/jail.conf
+	# awk '/[-a-z]+ {/ { print $1 }' /etc/jail.conf | while read -r name; do
+	# 	line=$(jls -j "$name" host.hostname jid)
+	# 	if [ $? -eq 0 ]; then
+	# 		echo "$line"
+	# 	else
+	# 		printf '%s -\n' "$name"
+	# 	fi
+	#	#printf "%s\n" "$name"
+	#	#jls host.hostname ip4.addr
+	#done
 }
 
-_jail_chroot() {
+jail_chroot() {
 	local name="$1"
-	[ -z "$name" ] && _err "Cannot start chroot: missing name"
+	[ -z "$name" ] && err "Cannot start chroot: missing name"
 	local path="$JROOT/$name/root"
 	echo "--> $path"
 	env SHELL= chroot "$path"
 }
 
-_jail_delete() {
+delete_jail() {
 	local name="$1"
-	[ -z "$name" ] && _err "Cannot drop jail: missing name"
+	[ -z "$name" ] && err "Cannot delete jail: missing name"
 
 	if [ "$(jls host.hostname jid |grep -c "^$name")" == "1" ]; then
 		jail -qr "$name"
@@ -184,97 +193,89 @@ _jail_delete() {
 	sed -i.bak -e "/^$name/d" /etc/jail.conf
 }
 
-_cmd_template() {
+template_cmd() {
 	local cmd="${1:-help}"
 	shift || true
 
 	case "$cmd" in
 		sync)
-		      	_template_update
+			sync_template
+			;;
+		delete)
+			delete_template "$@"
 			;;
 		*)
 			cat <<EOM
 Usage: template [cmd]
 sync                    - Sync template for current release
+delete                  - Delete template for named release
 EOM
 			;;
 	esac
 }
 
-_cmd_release() {
+release_cmd() {
 	local cmd="${1:-help}"
 	shift || true
 
 	case "$cmd" in
 		sync)
-			_create_zfs_datasets
-		      	_release_fetch
-			_release_extract
-			_release_update
-			;;
-		fetch)
-		      	_release_fetch
-			;;
-		extract)
-			_release_extract
+			sync_release
+			update_release
 			;;
 		update)
-			_release_update
+			update_release
+			;;
+		delete)
+			delete_release "$@"
 			;;
 		*)
 			cat <<EOM
 Usage: release [cmd]
-sync                    - Download/unpack/update release
-fetch                   - Download distfiles for latest release
-extract                 - Unpack latest release
-update                  - Update latest release using freebsd-update
+sync                    - Create fs, fetch, extract & update
+update                  - Update release using freebsd-update
+delete                  - Delete named release
 EOM
 			;;
 	esac
 }
 
 
-_main() {
+main() {
 	local cmd="${1:-help}"
 	shift || true
 
 	case "$cmd" in
 		release)
-			_cmd_release "$@"
+			release_cmd "$@"
 			;;
 		template)
-			_cmd_template "$@"
+			template_cmd "$@"
 			;;
 		create|c)
-			_jail_new_overlay "$@"
-			_jail_new_config "$@"
+			create_jail "$@"
 			;;
 		delete)
-			_jail_delete "$@"
+			delete_jail "$@"
 			;;
 		chroot)
-		    	_jail_chroot "$@"
+			jail_chroot "$@"
 			;;
 		list|ls)
-		   	_jail_list "$@"
+			jail_list "$@"
 			;;
 		start)
-		   	_jail_start "$@"
+			start_jail "$@"
 			;;
 		stop)
-		  	_jail_stop "$@"
+			stop_jail "$@"
 			;;
 		restart)
-		   	_jail_stop "$@" && _jail_start "$@"
+			stop_jail "$@" && start_jail "$@"
 			;;
 		shell)
-		       	_jail_shell "$@"
-		       	;;
-		upgrade)
-		       	_jail_stop "$@"
-		       	#_jail_update_fstab "$@"
-		       	_jail_start "$@"
-		       	;;
+			jail_shell "$@"
+			;;
 		*)
 			cat <<EOM
 Usage: jsh [cmd]
@@ -282,7 +283,6 @@ start <name>            - Start jail <name>
 stop <name>             - Stop jail <name>
 shell <name>            - Start a shell in jail <name>
 create <name> [id]      - Create jail <name>
-upgrade <name>          - Upgrade jail <name>
 delete <name>           - Delete jail <name>
 release                 - Release sub-commands
 template                - Template sub-commands
@@ -291,5 +291,5 @@ EOM
 	esac
 }
 
-_main "$@"
+main "$@"
 
