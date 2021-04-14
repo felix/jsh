@@ -20,27 +20,34 @@ err() {
 
 log() { [ -z "$QUIET" ] && printf "[%s] %s\n" "$(date -Iseconds)" "$1"; }
 
-sync_release() {
-	log "Creating global datasets..."
-	[ ! -d "$ZROOT" ] && zfs create -o compression=lz4 -o mountpoint="$JROOT" -p "$ZROOT"
-	[ ! -d "$ZROOT/$JDIST" ] && zfs create -p "$ZROOT/$JDIST"
+create_release() {
+	if [ ! -d "$JROOT" ]; then
+		log "Creating global datasets..."
+		zfs create -o compression=lz4 -o mountpoint="$JROOT" -p "$ZROOT"
+	fi
+	if [ ! -d "$JROOT/$JDIST" ]; then
+		log "Creating release datasets..."
+		zfs create -p "$ZROOT/$JDIST"
+	fi
+
+	create_template
 
 	for f in base.txz lib32.txz; do
 		if [ ! -f "$JROOT/$JDIST/$f" ]; then
 			log "Fetching $JDIST/$f..."
 			fetch -m -o "$JROOT/$JDIST/$f" "$DIST_SRC/$f"
+
 			log "Extracting $JDIST/$f..."
+			mkdir -p "$JROOT/$JTMPL"
 			tar -C "$JROOT/$JTMPL" -xkf "$JROOT/$JDIST/$f"
 		fi
 	done
 
-	log "Updating $JDIST/$f..."
-	env UNAME_r="$RELEASE" freebsd-update -b "$JROOT/$JTMPL" fetch install
-	env UNAME_r="$RELEASE" freebsd-update -b "$JROOT/$JTMPL" IDS
+	update_release
 }
 
 update_release() {
-	[ ! -d "$JROOT/$JTMPL" ] && err "Relase sync required"
+	sync_template
 	log "Updating $JDIST/$f..."
 	env UNAME_r="$RELEASE" freebsd-update -b "$JROOT/$JTMPL" fetch install
 	env UNAME_r="$RELEASE" freebsd-update -b "$JROOT/$JTMPL" IDS
@@ -54,18 +61,32 @@ delete_release() {
 	zfs destroy -r "$ZROOT/.releases/$1"
 }
 
-sync_template() {
-	log "Creating template datasets..."
-	[ ! -d "$ZROOT/$JTMPL" ] && zfs create -p "$ZROOT/$JTMPL"
-	[ ! -d "$ZROOT/$JSKEL" ] && zfs create -p "$ZROOT/$JSKEL"
+create_template() {
+	if [ ! -d "$JROOT/$JTMPL" ]; then
+		log "Creating template datasets..."
+		zfs create -p "$ZROOT/$JTMPL"
+	fi
+	if [ ! -d "$JROOT/$JSKEL" ]; then
+		log "Creating skeleton datasets..."
+		zfs create -p "$ZROOT/$JSKEL"
+	fi
+}
 
-	log "Creating template skeleton..."
+sync_template() {
+	create_template
+	log "Syncing template skeleton..."
 	[ -e "$JROOT/$JTMPL/var/empty" ] && chflags noschg "$JROOT/$JTMPL/var/empty"
 	for d in etc usr/local tmp var root; do
 		if [ -d "$JROOT/$JTMPL/$d" ]; then
-			log "Moving $JTMPL/$d..."
-			mkdir -p "$(dirname "$JROOT/$JSKEL/$d")"
-			mv -iv "$JROOT/$JTMPL/$d" "$JROOT/$JSKEL/$d"
+			#log "Syncing $JTMPL/$d..."
+			#rsync -Pa --update "$JROOT/$JTMPL/$d/" "$JROOT/$JSKEL/$d/"
+			if [ -d "$JROOT/$JSKEL/$d" ]; then
+				err "$JROOT/$JSKEL/$d exists"
+			else
+				log "Moving $JTMPL/$d..."
+				mkdir -p "$(dirname "$JROOT/$JSKEL/$d")"
+				mv -iv "$JROOT/$JTMPL/$d" "$JROOT/$JSKEL/$d"
+			fi
 		fi
 	done
 	[ -e "$JROOT/$JSKEL/var/empty" ] && chflags schg "$JROOT/$JSKEL/var/empty"
@@ -74,6 +95,10 @@ sync_template() {
 	cd "$JROOT/$JTMPL"
 	mkdir -p s
 	for d in etc tmp var root; do
+		if [ -e "$d" ]; then
+			err "$JROOT/$JTMPL/$d exists"
+			#mv "$d" "$d.old"
+		fi
 		log "Linking $JTMPL/$d..."
 		ln -sf "s/$d" "$d"
 	done
@@ -218,9 +243,8 @@ release_cmd() {
 	shift || true
 
 	case "$cmd" in
-		sync)
-			sync_release
-			update_release
+		create)
+			create_release
 			;;
 		update)
 			update_release
